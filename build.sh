@@ -45,6 +45,8 @@ NONE='\033[0m'
 
 DEVICE_TYPE="gpu"
 
+export LD_LIBRARY_PATH=/usr/local/cuda-12.8/targets/x86_64-linux/lib:/usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink/lib:$LD_LIBRARY_PATH
+
 function python_version_check() {
   PY_MAIN_VERSION=`${python} -V 2>&1 | awk '{print $2}' | awk -F '.' '{print $1}'`
   PY_SUB_VERSION=`${python} -V 2>&1 | awk '{print $2}' | awk -F '.' '{print $2}'`

@@ -29,6 +29,7 @@ from fastdeploy.entrypoints.chat_utils import parse_chat_messages
 from fastdeploy.input.ernie4_5_tokenizer import Ernie4_5Tokenizer
 from fastdeploy.input.utils import IDS_TYPE_FLAG
 from fastdeploy.utils import data_processor_logger
+from fastdeploy.multimodal.hasher import MultimodalHasher
 
 from .image_preprocessor.image_preprocessor_adaptive import AdaptiveImageProcessor
 from .process_video import read_frames_decord, read_video_decord
@@ -234,6 +235,8 @@ class DataProcessor:
             "cur_position": 0,
             "pic_cnt": 0,
             "video_cnt": 0,
+            "mm_hashes": [],
+            "mm_ranges": []
         }
 
         messages = parse_chat_messages(request.get("messages"))
@@ -313,6 +316,9 @@ class DataProcessor:
         )[1]
         num_tokens = (patches_h * patches_w) // (self.spatial_conv_size**2)
 
+        left = len(outputs["input_ids"])
+        right = left + num_tokens
+        outputs["mm_ranges"].append((left, right))
         outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
         outputs["token_type_ids"].extend([IDS_TYPE_FLAG["image"]] * num_tokens)
 
@@ -330,6 +336,7 @@ class DataProcessor:
             input_data_format=ChannelDimension.LAST,
         )
         outputs["images"].append(ret["pixel_values"])
+        outputs["mm_hashes"].append(MultimodalHasher.hash_features(ret["pixel_values"]))
         outputs["grid_thw"].append(ret["image_grid_thw"])
         outputs["image_type_ids"].append(0)
 
@@ -354,9 +361,13 @@ class DataProcessor:
             input_data_format=ChannelDimension.LAST,
         )
         outputs["images"].append(ret["pixel_values_videos"])
+        outputs["mm_hashes"].append(MultimodalHasher.hash_features(ret["pixel_values_videos"]))
         outputs["grid_thw"].append(ret["video_grid_thw"])
         outputs["image_type_ids"].extend([1] * num_frames)
 
+        left = len(outputs["input_ids"])
+        right = left + num_tokens
+        outputs["mm_ranges"].append((left, right))
         outputs["input_ids"].extend([self.image_patch_id] * num_tokens)
         outputs["token_type_ids"].extend([IDS_TYPE_FLAG["video"]] * num_tokens)
 

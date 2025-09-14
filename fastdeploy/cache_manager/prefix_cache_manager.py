@@ -472,6 +472,7 @@ class PrefixCacheManager:
             else:
                 prompt_token_ids = task.prompt_token_ids
             input_ids = prompt_token_ids + task.output_token_ids
+            multimodal_inputs = task.multimodal_inputs
             can_cache_computed_tokens = num_computed_tokens - num_computed_tokens % block_size
             left_input_ids = input_ids[num_cached_tokens:can_cache_computed_tokens]
             gpu_extra_block_ids = block_tables[num_cached_tokens // block_size :]
@@ -484,6 +485,7 @@ class PrefixCacheManager:
                     req_id=req_id,
                     current_time=current_time,
                     input_ids=input_ids,
+                    multimodal_inputs=multimodal_inputs,
                     left_input_ids=left_input_ids,
                     gpu_block_ids=gpu_extra_block_ids,
                     block_size=block_size,
@@ -526,6 +528,7 @@ class PrefixCacheManager:
                 else:
                     prompt_token_ids = task.prompt_token_ids
                 input_ids = prompt_token_ids + task.output_token_ids
+                multimodal_inputs = task.multimodal_inputs
                 req_id = task.request_id
                 logger.info(f"request_match_blocks: start to allocate blocks for req_id {req_id}")
                 input_token_num = len(input_ids)
@@ -538,7 +541,7 @@ class PrefixCacheManager:
                     match_block_node,
                     gpu_match_token_num,
                     cpu_match_token_num,
-                ) = self.match_block(req_id, input_ids, block_size)
+                ) = self.match_block(req_id, input_ids, multimodal_inputs, block_size)
 
                 #  update matched node info
                 self._update_matched_node_info(req_id, match_block_node, current_time=time.time())
@@ -616,6 +619,7 @@ class PrefixCacheManager:
                 hit_info["cpu_cache_blocks"] = 0
                 self.metrics.req_count += 1
                 input_ids = task.prompt_token_ids
+                multimodal_inputs = task.multimodal_inputs
                 req_id = task.request_id
                 logger.info(f"request_block_ids: start to allocate blocks for req_id {req_id}")
                 input_token_num = len(input_ids)
@@ -629,7 +633,7 @@ class PrefixCacheManager:
                     match_block_node,
                     gpu_match_token_num,
                     cpu_match_token_num,
-                ) = self.match_block(req_id, input_ids, block_size)
+                ) = self.match_block(req_id, input_ids, multimodal_inputs, block_size)
                 match_gpu_blocks_num = len(match_gpu_block_ids)
                 matched_token_num_in_cpu_and_gpu = gpu_match_token_num + cpu_match_token_num
                 # check enough gpu memory to allocate cache
@@ -672,6 +676,7 @@ class PrefixCacheManager:
                     block_size,
                     match_block_node,
                     dec_block_num,
+                    multimodal_inputs
                 )
                 self.req_leaf_map[req_id] = leaf_node
                 self.leaf_req_map[leaf_node].add(req_id)
@@ -1028,17 +1033,42 @@ class PrefixCacheManager:
         )
         return total_cpu_free_count
 
-    def cal_block_hash(self, block):
+    def get_mm_hash_keys(self, multimodal_inputs, start_idx, end_idx, cur_mm_idx):
+        """
+        get multimodal items related to current token block
+        """
+        if not multimodal_inputs:
+            return None, cur_mm_idx
+
+        mm_keys: list[int] = []
+        mm_ranges = multimodal_inputs["mm_ranges"]
+        mm_hashes = multimodal_inputs["mm_hashes"]
+
+        while cur_mm_idx < len(mm_ranges) and mm_ranges[cur_mm_idx][0] < end_idx:
+            if mm_ranges[cur_mm_idx][1] < start_idx:
+                cur_mm_idx += 1
+                continue
+
+            mm_keys.append(mm_hashes[cur_mm_idx])
+            if mm_ranges[cur_mm_idx][1] <= end_idx:
+                cur_mm_idx += 1
+            else:
+                break
+
+        return mm_keys, cur_mm_idx
+
+    def cal_block_hash(self, block, mm_keys):
         """
         calculate hash value of a block
         """
-        return hash(tuple(block))
+        return hash((tuple(block), tuple(mm_keys)))
 
-    def match_block(self, req_id, input_ids, block_size):
+    def match_block(self, req_id, input_ids, multimodal_inputs, block_size):
         """
         Args:
             req_id: Task request ID
             input_ids: Input token IDs
+            multimodal_inputs: Metadata of multimodal items
             block_size: Size of each block
 
         Returns:
@@ -1062,6 +1092,7 @@ class PrefixCacheManager:
         matche_nodes = []
         has_modified_gpu_lru_leaf_heap = False
         has_modified_cpu_lru_leaf_heap = False
+        cur_mm_idx = 0
 
         with self.cache_status_lock:
             while match_token_num < total_token_num:
@@ -1069,7 +1100,10 @@ class PrefixCacheManager:
                 token_num = len(token_block)
                 if token_num != block_size:
                     break
-                hash_value = self.cal_block_hash(token_block)
+                mm_keys, cur_mm_idx = self.get_mm_hash_keys(
+                    multimodal_inputs, match_token_num, match_token_num + block_size, cur_mm_idx
+                )
+                hash_value = self.cal_block_hash(token_block, mm_keys)
                 if hash_value in current_match_node.children:
                     child = current_match_node.children[hash_value]
                     matche_nodes.append(child)
@@ -1140,6 +1174,7 @@ class PrefixCacheManager:
         block_size,
         last_node,
         reverved_dec_block_num,
+        multimodal_inputs
     ):
         """
         Build path for blocks beyond the common prefix
@@ -1157,9 +1192,11 @@ class PrefixCacheManager:
         gpu_block_ids = gpu_block_ids.copy()
         node = last_node
         reverved_dec_block_ids = []
-        input_hash_value = self.cal_block_hash(input_ids)
+        mm_keys = multimodal_inputs["mm_hashes"] if multimodal_inputs else None
+        input_hash_value = self.cal_block_hash(input_ids, mm_keys)
 
         token_num = len(left_input_ids)
+        matched_token_num = len(input_ids) - len(left_input_ids)
         if token_num == 0:
             for i in range(reverved_dec_block_num):
                 reverved_dec_block_ids.append(gpu_block_ids.pop(0))
@@ -1169,6 +1206,7 @@ class PrefixCacheManager:
         unique_node_ids = []
         new_last_node = last_node
         has_unfilled_block = False
+        cur_mm_idx = 0
 
         for i in range(0, token_num, block_size):
             current_block = left_input_ids[i : i + block_size]
@@ -1176,7 +1214,10 @@ class PrefixCacheManager:
             if current_block_size != block_size:
                 has_unfilled_block = True
             else:
-                hash_value = self.cal_block_hash(current_block)
+                mm_keys, cur_mm_idx = self.get_mm_hash_keys(
+                    multimodal_inputs, matched_token_num + i, matched_token_num + i + block_size, cur_mm_idx
+                )
+                hash_value = self.cal_block_hash(current_block, mm_keys)
                 allocated_block_id = gpu_block_ids.pop(0)
                 node_id = self.node_id_pool.pop()
                 unique_node_ids.append(node_id)
