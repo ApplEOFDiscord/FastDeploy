@@ -1005,7 +1005,7 @@ class EngineArgs:
             self.disable_chunked_prefill = int(envs.FD_DISABLE_CHUNKED_PREFILL)
             if self.disable_chunked_prefill:
                 self.enable_chunked_prefill = False
-
+        
         if self.max_num_batched_tokens is None:
             if int(envs.ENABLE_V1_KVCACHE_SCHEDULER):
                 if paddle.is_compiled_with_xpu():

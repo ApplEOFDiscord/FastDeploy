@@ -446,7 +446,6 @@ class GPUModelRunner(ModelRunnerBase):
         num_running_requests: batch_size
         TODO(gongshaotian): Refactor this func
         """
-
         # NOTE(luotingdan): Set environment variable of prefill node
         if req_dicts[-1].disaggregate_info is not None and req_dicts[-1].disaggregate_info["role"] == "prefill":
             os.environ["PREFILL_NODE_ONE_STEP_STOP"] = "1"
@@ -532,13 +531,14 @@ class GPUModelRunner(ModelRunnerBase):
                     if self.enable_mm:
                         inputs = self._preprocess_mm_task(request.multimodal_inputs)
                         if inputs.get("images") is not None:
-                            self.share_inputs["image_features"] = self.extract_vision_features(inputs)
+                            image_features = self.extract_vision_features(inputs)
+                            uncached_tokens = np.array(request.prompt_token_ids)
+                            uncached_image_token_num = np.sum(uncached_tokens == self.model_config.im_patch_id)
+                            self.share_inputs["image_features"] = image_features[-uncached_image_token_num:, :]
                         else:
                             # Compatible with the situation that lacks images and videos
                             self.share_inputs["image_features"] = None
                         position_ids = inputs["position_ids"]
-                        length = inputs["input_ids"].shape[1]
-                        self.share_inputs["input_ids"][idx : idx + 1, :length] = inputs["input_ids"]
                     else:
                         self.share_inputs["seq_lens_decoder"][idx : idx + 1] = request.get("seq_lens_decoder", 0)
                         self.share_inputs["step_seq_lens_decoder"][idx : idx + 1] = request.get("seq_lens_decoder", 0)
