@@ -153,6 +153,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Timeout for token processor health check
     "FD_TOKEN_PROCESSOR_HEALTH_TIMEOUT": lambda: int(os.getenv("FD_TOKEN_PROCESSOR_HEALTH_TIMEOUT", "120")),
     "FD_OUTPUT_TOKEN_HANG_TIMEOUT": lambda: int(os.getenv("FD_OUTPUT_TOKEN_HANG_TIMEOUT", "60")),
+    # Enable batch scheduler to increase batch size under DP+EP
+    "FD_ENABLE_BATCH_SCHEDULER": lambda: int(os.getenv("FD_ENABLE_BATCH_SCHEDULER", "0")),
+    # Timeout for batching reqs, 500ms in default
+    "FD_RECV_BATCH_TIMEOUT": lambda: int(os.getenv("FD_RECV_BATCH_TIMEOUT", "500")),
+    # Port for IM reporting
+    "FD_REPORT_IM_PORT": lambda: int(os.getenv("FD_REPORT_IM_PORT", "9009")),
 }
 
 
