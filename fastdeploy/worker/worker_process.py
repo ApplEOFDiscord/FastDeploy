@@ -265,7 +265,7 @@ class PaddleDisWorkerProc:
             name="infer_finished_signal",
             array=infer_finished_signal_data,
             dtype=np.int32,
-            suffix=self.parallel_config.local_engine_worker_queue_port,
+            suffix=self.parallel_config.engine_worker_queue_port,
             create=False,
         )
 
@@ -472,6 +472,7 @@ class PaddleDisWorkerProc:
                 ):
                     req_dicts, cur_max_bsz_index = self.get_tasks()
                 else:
+                    req_dicts, cur_max_bsz_index = None, 0
                     if self.scheduler_config.splitwise_role == "prefill":
                         # Synchronize the signal for other workers
                         self._tp_barrier_wait() if tp_size > 1 else None
@@ -513,7 +514,7 @@ class PaddleDisWorkerProc:
             self.infer_finished_signal.value[0] = 1
 
     def get_tasks(self):
-        req_dicts, cur_max_bsz_index = [], [], 0
+        req_dicts, cur_max_bsz_index = [], 0
         logger.info(f"Rank: {self.local_rank} Detected new requests.")
         self.insert_step = True
         self.infer_finished_signal.value[0] = 0
